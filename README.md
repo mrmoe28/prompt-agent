@@ -55,10 +55,16 @@ The **`prompt-rewrite` skill** is copied into `~/.claude/skills/` — the pad
 invokes it, so without it the first turn fails. An existing file of that name
 is left untouched.
 
+## Text size
+
+**A+** and **A−** in the header resize everything in the pad — the prompt, the
+chat, the buttons — and the size is remembered next time you open it. It runs
+from 8 to 22 points and starts at 12.
+
 ## Where your thread is saved
 
-Your conversation is saved outside the package, so closing the pad and
-reopening it picks the thread back up.
+Your conversation, and your text size, are saved outside the package, so
+closing the pad and reopening it picks the thread back up.
 
 | OS | Path |
 | --- | --- |

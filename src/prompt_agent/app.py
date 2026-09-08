@@ -77,6 +77,7 @@ def config_dir():
 
 CONFIG = config_dir()
 STATE = os.path.join(CONFIG, ".session.json")
+PREFS = os.path.join(CONFIG, ".prefs.json")
 
 
 def open_in_editor(path):
@@ -382,6 +383,7 @@ class RoundButton(tk.Canvas):
         self.hover = hover or bg
         self.command, self.state = command, "normal"
         self.radius = radius
+        self.pad = pad
         w = font.measure(text) + pad[0] * 2
         h = font.metrics("linespace") + pad[1] * 2
         super().__init__(parent, width=w, height=h, highlightthickness=0,
@@ -391,6 +393,15 @@ class RoundButton(tk.Canvas):
         self.bind("<Enter>", lambda e: self._draw(
             self.hover if self.state == "normal" else self.bg))
         self.bind("<Leave>", lambda e: self._draw(self.bg))
+
+    def resize(self):
+        """Re-measure after the font changed size.
+
+        The pill is a canvas with a fixed width/height picked at build time, so
+        a bigger font would otherwise overflow the shape it is drawn in."""
+        self.config(width=self.font.measure(self.txt) + self.pad[0] * 2,
+                    height=self.font.metrics("linespace") + self.pad[1] * 2)
+        self._draw(self.bg)
 
     def _draw(self, fill):
         self.delete("all")
@@ -442,6 +453,40 @@ def save_state(session, started, result, msgs):
         os.replace(tmp, STATE)      # atomic: never leave a half-written file
     except OSError:
         pass
+
+
+MIN_SIZE, MAX_SIZE = 8, 22
+
+
+def clamp_size(n):
+    """Keep the font in a range that still lays out -- and never crashes Tk."""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        n = 12
+    return max(MIN_SIZE, min(MAX_SIZE, n))
+
+
+def save_prefs(d):
+    """Small settings that are not part of the conversation -- font size today.
+
+    Kept out of .session.json so a bad write can never cost you the thread."""
+    try:
+        tmp = PREFS + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(d, f)
+        os.replace(tmp, PREFS)
+    except OSError:
+        pass
+
+
+def load_prefs():
+    try:
+        with open(PREFS) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def load_state():
@@ -515,9 +560,14 @@ class App:
         # draws its own.
         root.overrideredirect(False)
 
-        self.mono = tkfont.Font(family="monospace", size=10)
-        self.ui = tkfont.Font(family="sans-serif", size=10)
-        self.uib = tkfont.Font(family="sans-serif", size=10, weight="bold")
+        # One size drives every font in the pad. These are live font objects:
+        # changing .size reflows every widget already drawn with them, so the
+        # A- / A+ buttons take effect without rebuilding the window.
+        self.fsize = clamp_size(load_prefs().get("font_size", 12))
+        self.mono = tkfont.Font(family="monospace", size=self.fsize)
+        self.ui = tkfont.Font(family="sans-serif", size=self.fsize)
+        self.uib = tkfont.Font(family="sans-serif", size=self.fsize,
+                               weight="bold")
 
         # --- toolbar. The WM draws the real titlebar (name, move, close),
         # so this row keeps only the controls the WM does not provide.
@@ -529,6 +579,13 @@ class App:
                                font=self.ui, padx=8, cursor="hand2")
         self.newbtn.pack(side="right")
         self.newbtn.bind("<Button-1>", lambda e: self.reset())
+        # Text size. Fixed 11px so these stay findable at any pad size -- a
+        # control for shrinking the text must not shrink itself out of reach.
+        for label, step in (("A+", 1), ("A-", -1)):
+            b = tk.Label(self.bar, text=label, bg=BG, fg=MUTED,
+                         font=("sans-serif", 11), padx=6, cursor="hand2")
+            b.pack(side="right")
+            b.bind("<Button-1>", lambda e, d=step: self.bump_font(d))
         # Advise and Explain hide the prompt pane, which used to strand a
         # rewritten prompt off-screen with no way back to it. This is that way
         # back; it only appears once there is a prompt worth returning to.
@@ -685,6 +742,39 @@ class App:
         self.msgs.append((who, text.strip(), err))
         self.relayout()
         self.chat.yview_moveto(1.0)          # newest message into view
+
+    def pills(self):
+        """Every RoundButton in the window, found by walking the widget tree.
+
+        Collected rather than listed so a button added later is not silently
+        left at the old size."""
+        out, stack = [], [self.root]
+        while stack:
+            w = stack.pop()
+            if isinstance(w, RoundButton):
+                out.append(w)
+            stack.extend(w.winfo_children())
+        return out
+
+    def bump_font(self, step):
+        """Grow or shrink every font at once, and remember the choice.
+
+        self.ui/mono/uib are shared font objects, so setting .size reflows the
+        widgets that use them. The chat canvas draws text at computed
+        coordinates instead, so it has to be laid out again by hand."""
+        want = clamp_size(self.fsize + step)
+        if want == self.fsize:
+            self.status.config(text="text size is at its %s"
+                               % ("smallest" if step < 0 else "largest"))
+            return
+        self.fsize = want
+        for f in (self.ui, self.mono, self.uib):
+            f.configure(size=want)
+        for w in self.pills():
+            w.resize()
+        self.relayout()
+        save_prefs(dict(load_prefs(), font_size=want))
+        self.status.config(text="text size %d" % want)
 
     def relayout(self, _=None):
         """Redraw every bubble. Cheap at these message counts, and it keeps
