@@ -4,13 +4,14 @@ A small floating pad for your desktop. Paste in rough text, get back a clean
 prompt you can hand to a coding agent. It also explains an agent's jargon-heavy
 question in plain words, and answers straight questions with a straight answer.
 
-Three buttons, one text box:
+Four buttons, one text box:
 
 | Button | What it does |
 | --- | --- |
 | **Send** | Rewrites whatever you typed into a sharp, ready-to-paste prompt. Reply in the box to refine it — it remembers the thread. |
 | **Explain** | Paste a question *an agent asked you*. Get it in plain English, plus a draft reply to paste back. |
 | **Advise** | Ask a straight question. Get an answer with a recommendation, the tradeoff, and the next step — not a menu. |
+| **Grab** | Pull the last thing another Claude Code session said into the box, so you don't have to copy it across. |
 
 The **Copy** button always copies whatever is in the left pane. **Send to**
 delivers that same text to another Claude Code session on your machine — see
@@ -72,13 +73,25 @@ reopening it picks the thread back up.
 ## Talking to your other terminals
 
 If a Claude Code session in another terminal asks you something you don't
-follow, paste its question into the pad and press **Explain**. You get the
-question in plain words plus a drafted reply.
+follow, the round trip is three clicks:
 
-**Send to** then hands that reply straight to the session that asked, so you
-don't have to switch windows and retype it. It lists the Claude Code sessions
-currently running on your machine by name and status; you pick one, and nothing
-is sent until you do.
+1. **Grab** — pick that terminal from the list; its last message drops into the
+   input box. (Or just paste the question yourself, if you'd rather.)
+2. **Explain** — you get the question in plain words, plus a drafted reply.
+3. **Send to** — the reply goes back to that terminal. It offers the one you
+   grabbed from, so you don't hunt for it twice.
+
+Both lists show the Claude Code sessions currently running on your machine, by
+name and status. Nothing is grabbed or sent until you click one.
+
+**Naming your sessions.** The names in that list are auto-generated
+(`yourname-a1`) unless you set them. Start a session with `claude -n crm` and it
+shows up as `crm`, which makes the picker readable when several are open. The
+name is set at launch; there's no way to rename a running session.
+
+Grab reads that session's transcript on disk, so it sees what the agent last
+said — not what's scrolled on your screen. A session that hasn't answered
+anything yet has nothing to grab, and says so.
 
 The reply arrives there as a *message* — the same way a message from a person
 does. It is not typed into that session's input box and it does not press enter

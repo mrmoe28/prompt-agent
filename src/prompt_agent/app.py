@@ -257,6 +257,7 @@ def live_sessions():
             continue
         out.append({"name": name, "pid": pid,
                     "status": j.get("status") or "?",
+                    "sid": j.get("sessionId") or "",
                     "cwd": j.get("cwd") or ""})
     out.sort(key=lambda s: s["name"])
     return out
@@ -284,6 +285,55 @@ def send_to_session(name, message):
     if p.returncode != 0:
         return False, (p.stderr or p.stdout or "claude exited non-zero").strip()
     return True, p.stdout.strip()
+
+
+def last_question(session_id, limit=200000):
+    """The last thing a session said on screen, read from its transcript.
+
+    Claude Code appends every turn to
+    ~/.claude/projects/<slug>/<session-id>.jsonl. These run to tens of MB, so
+    only the tail is read -- enough for the final turn, never the whole file.
+    Returns "" if nothing usable is there; the caller falls back to pasting.
+    """
+    base = os.path.expanduser("~/.claude/projects")
+    path = ""
+    try:
+        for d in os.listdir(base):
+            cand = os.path.join(base, d, session_id + ".jsonl")
+            if os.path.exists(cand):
+                path = cand
+                break
+    except OSError:
+        return ""
+    if not path:
+        return ""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            if size > limit:
+                f.seek(size - limit)
+                f.readline()        # drop the partial line the seek landed in
+            tail = f.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+    for line in reversed(tail.splitlines()):
+        try:
+            j = json.loads(line)
+        except ValueError:
+            continue
+        if j.get("type") != "assistant":
+            continue
+        content = j.get("message", {}).get("content")
+        if isinstance(content, list):
+            text = "".join(b.get("text", "") for b in content
+                           if isinstance(b, dict) and b.get("type") == "text")
+        elif isinstance(content, str):
+            text = content
+        else:
+            text = ""
+        if text.strip():
+            return text.strip()
+    return ""
 
 
 def split_output(s):
@@ -534,6 +584,11 @@ class App:
                                   lambda: self.send("advise"), self.ui,
                                   FIELD, FG, hover="#3a3a3c")
         self.advbtn.pack(side="left", padx=(6, 0))
+        # Pulls the last thing another terminal said, so a question does not
+        # have to be copied across by hand before Explain can work on it.
+        self.grabbtn = RoundButton(row, "Grab", self.grab, self.ui,
+                                   FIELD, FG, hover="#3a3a3c")
+        self.grabbtn.pack(side="left", padx=(6, 0))
         self.status = tk.Label(row, text="paste a prompt — enter to send",
                                bg=BG, fg=MUTED, font=self.ui)
         self.status.pack(side="left", padx=8)
@@ -905,6 +960,60 @@ class App:
             self.status.config(text="failed")
         self.entry.focus_set()
 
+    def grab(self):
+        """Pull the last message from another terminal into the input box.
+
+        Same picker as Send to, so one list of sessions serves both directions:
+        grab the question from a terminal, and send the answer back to it."""
+        peers = [x for x in live_sessions() if x["pid"] != os.getpid()]
+        if not peers:
+            self.status.config(text="no other Claude sessions running")
+            return
+        self.pick_session("Grab the last message from which terminal?",
+                          self._grabbed)
+
+    def _grabbed(self, peer):
+        text = last_question(peer["sid"])
+        if not text:
+            self.status.config(
+                text="nothing to grab from %s yet" % peer["name"])
+            return
+        # Remembered so Send to can offer the same terminal back without
+        # making you find it in the list a second time.
+        self.grabbed_from = peer["name"]
+        self.entry.delete("1.0", "end")
+        self.entry.insert("1.0", text)
+        self.entry.focus_set()
+        self.status.config(
+            text="grabbed from %s — press Explain" % peer["name"])
+
+    def pick_session(self, title, on_pick):
+        """A small list of the live sessions. Nothing happens until a click."""
+        peers = [x for x in live_sessions() if x["pid"] != os.getpid()]
+        if not peers:
+            self.status.config(text="no other Claude sessions running")
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Sessions")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        tk.Label(win, text=title, bg=BG, fg=FG,
+                 font=self.ui).pack(padx=14, pady=(12, 8), anchor="w")
+        for peer in peers:
+            label = "%s  ·  %s  ·  pid %s" % (peer["name"], peer["status"],
+                                              peer["pid"])
+            RoundButton(win, label,
+                        lambda p=peer: (win.destroy(), on_pick(p)),
+                        self.ui, FIELD, FG,
+                        hover="#3a3a3c").pack(anchor="w", padx=14, pady=3)
+        cancel = tk.Label(win, text="cancel", bg=BG, fg=MUTED, font=self.ui,
+                          cursor="hand2")
+        cancel.pack(pady=(8, 12))
+        cancel.bind("<Button-1>", lambda e: win.destroy())
+        win.update_idletasks()
+        win.geometry("+%d+%d" % (self.root.winfo_rootx() + 40,
+                                 self.root.winfo_rooty() + 60))
+
     def send_to(self):
         """Deliver the drafted reply to whichever terminal asked the question.
 
@@ -913,38 +1022,14 @@ class App:
         you see on the left is what the other session gets."""
         if not self.result:
             return
-        peers = live_sessions()
-        me = os.getpid()
-        peers = [x for x in peers if x["pid"] != me]
-        if not peers:
-            self.status.config(text="no other Claude sessions running")
-            return
+        title = "Send this reply to which terminal?"
+        was = getattr(self, "grabbed_from", "")
+        if was:
+            title = "Send this reply back to %s?" % was
+        self.pick_session(title, self._deliver)
 
-        win = tk.Toplevel(self.root)
-        win.title("Send to")
-        win.configure(bg=BG)
-        win.transient(self.root)
-        tk.Label(win, text="Send this reply to which terminal?", bg=BG, fg=FG,
-                 font=self.ui).pack(padx=14, pady=(12, 8), anchor="w")
-        for peer in peers:
-            label = "%s  ·  %s  ·  pid %s" % (peer["name"], peer["status"],
-                                              peer["pid"])
-            b = RoundButton(win, label,
-                            lambda p=peer: self._deliver(p, win),
-                            self.ui, FIELD, FG, hover="#3a3a3c")
-            b.pack(anchor="w", padx=14, pady=3)
-        cancel = tk.Label(win, text="cancel", bg=BG, fg=MUTED, font=self.ui,
-                          cursor="hand2")
-        cancel.pack(pady=(8, 12))
-        cancel.bind("<Button-1>", lambda e: win.destroy())
-        win.update_idletasks()
-        x = self.root.winfo_rootx() + 40
-        y = self.root.winfo_rooty() + 60
-        win.geometry("+%d+%d" % (x, y))
-
-    def _deliver(self, peer, win):
+    def _deliver(self, peer):
         """Hand the reply to the chosen session, off the UI thread."""
-        win.destroy()
         text = self.result
         name = peer["name"]
         self.sendtobtn.config(state="disabled")
