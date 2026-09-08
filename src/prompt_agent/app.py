@@ -132,6 +132,18 @@ STYLE = (
     "the assignment clear, using only the sections that genuinely help."
 )
 
+# Replies in rewrite mode are ambiguous: "make it shorter" wants a new prompt,
+# but "why is this useful?" wants an answer. Forcing a fenced block on both
+# turned a plain question into a silent prompt rewrite -- the chat showed only
+# "(prompt updated)".
+REPLY = (
+    "If my message is a QUESTION about the prompt or about what to do next, "
+    "just answer it in plain prose. Do NOT return a prompt, do NOT use a "
+    "fenced block.\n\n"
+    "If my message asks for a CHANGE to the prompt, return the full revised "
+    "prompt in a single fenced block and nothing else."
+)
+
 # Translate mode. The opposite of STYLE: here the questions ARE the point.
 # The agent's job is to decode jargon and hand back a reply Moe can paste.
 ASK = (
@@ -689,8 +701,7 @@ class App:
             payload = text
             follow_up = True
         else:
-            payload = (f"{text}\n\nReturn the full revised prompt in a fenced "
-                       f"block. {STYLE}")
+            payload = f"{text}\n\n{REPLY}"
         self.say("you", text)
         self.entry.delete("1.0", "end")
         self.busy = True
@@ -756,11 +767,17 @@ class App:
                     self.copybtn.config(state="normal")
                 if aside:
                     self.say("agent", aside)
-                elif getattr(self, "mode", "rewrite") != "advise":
+                elif prompt:
                     self.say("agent", "(prompt updated)")
                 save_state(self.session, self.started, self.result, self.msgs)
                 if getattr(self, "mode", "rewrite") == "advise":
                     self.status.config(text="advice above — reply to dig in")
+                elif not prompt:
+                    # A question answered in the chat: the prompt on the left
+                    # is untouched and still the thing worth copying.
+                    self.status.config(
+                        text="answered in the chat — prompt on the left is "
+                             "unchanged")
                 else:
                     # The prompt is always usable -- a question is optional.
                     self.status.config(
