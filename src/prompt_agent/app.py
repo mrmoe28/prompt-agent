@@ -668,6 +668,7 @@ class App:
         text = self.entry.get("1.0", "end").strip()
         if not text:
             return
+        follow_up = False
         if mode in ("translate", "advise"):
             # Its own session: these threads are a Q&A, and mixing them into
             # the rewrite history would leave the agent revising the wrong
@@ -681,6 +682,12 @@ class App:
         elif not self.started:
             self.session = str(uuid.uuid4())
             payload = f"/{SKILL} {text}\n\n{STYLE}"
+        elif getattr(self, "mode", "rewrite") in ("advise", "translate"):
+            # A reply inside an advice thread is a follow-up question, not a
+            # prompt to rewrite. Asking for a fenced block here turned
+            # "what about speed?" into a rewritten prompt instead of an answer.
+            payload = text
+            follow_up = True
         else:
             payload = (f"{text}\n\nReturn the full revised prompt in a fenced "
                        f"block. {STYLE}")
@@ -691,8 +698,11 @@ class App:
         self.askbtn.config(state="disabled")
         self.advbtn.config(state="disabled")
         self.status.config(text="thinking…")
-        first = not self.started or mode in ("translate", "advise")
-        self.mode = mode
+        # A follow-up resumes the thread; only a fresh button press starts one.
+        first = not follow_up and (not self.started
+                                   or mode in ("translate", "advise"))
+        if not follow_up:
+            self.mode = mode
         threading.Thread(
             target=lambda: self.q.put(run_claude(payload, self.session, first)),
             daemon=True).start()
@@ -730,10 +740,15 @@ class App:
                 self.started = True
                 prompt, aside = split_output(payload)
                 if getattr(self, "mode", "rewrite") == "advise" and not prompt:
-                    # Advice is prose, not a fenced prompt. Without this it
-                    # would all land in the narrow chat strip and the big
-                    # pane would sit empty.
-                    prompt, aside = payload.strip(), ""
+                    # Advice is prose, not a fenced prompt, so it goes to the
+                    # big pane where it is readable. The chat gets a short
+                    # marker instead of the whole answer: repeating hundreds
+                    # of words in the narrow strip buries the thread it is
+                    # meant to show.
+                    prompt = payload.strip()
+                    first_line = prompt.split("\n")[0].strip()
+                    aside = (first_line[:117] + "..."
+                             if len(first_line) > 120 else first_line)
                 if prompt:
                     self.result = prompt
                     self.out.delete("1.0", "end")
