@@ -196,7 +196,17 @@ STYLE = (
     "Use [NEEDED: ...] ONLY as an actual blank standing where a missing fact "
     "goes. Never mention the marker in an instruction to the reader -- do not "
     "write sentences like 'mark unverified facts [NEEDED: ...]'. If nothing is "
-    "missing, the prompt contains no [NEEDED] at all."
+    "missing, the prompt contains no [NEEDED] at all.\n\n"
+    "Some input is a QUESTION, not a job to do -- the user wants an opinion, "
+    "an explanation, a comparison or a recommendation. Recognise that case and "
+    "rewrite it as a sharper version of the SAME question. Then: no Task / "
+    "Constraints / Deliverable / Done-when sections, and NO [NEEDED] blanks at "
+    "all. A question does not need a repo name, a file path, a framework or a "
+    "success criterion -- if the answer would change depending on some detail, "
+    "write that into the question as a plain clause ('...and say what it "
+    "depends on') instead of demanding the detail up front. Keep the user's "
+    "own words and their level of technical language; sharpen the question, do "
+    "not make it sound like an engineer wrote it."
 )
 
 # Translate mode. The opposite of STYLE: here the questions ARE the point.
