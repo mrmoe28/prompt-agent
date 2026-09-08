@@ -82,12 +82,16 @@ follow, the round trip is three clicks:
 2. **Explain** — you get the question in plain words, plus a drafted reply.
    (Explain, not Advise: Advise answers *you* and writes no reply to paste.
    After a grab the Explain button lights up so the right one is obvious.)
-3. **Send to** — the reply goes back to that terminal. It offers the one you
-   grabbed from, so you don't hunt for it twice. In Advise mode, where there is
-   no drafted reply, it sends the answer itself.
+3. **Send to** — the reply goes straight back to the terminal you grabbed
+   from. No list: you get one confirmation showing the exact text and the
+   destination, and "another terminal" on that dialog opens the picker if you
+   want a different one. If that session has since exited, the picker opens and
+   says so. In Advise mode, where there is no drafted reply, it sends the answer
+   itself.
 
-Both lists show the Claude Code sessions currently running on your machine, by
-name and status. Nothing is grabbed or sent until you click one.
+The Grab list, and the Send to picker when it appears, show the Claude Code
+sessions currently running on your machine, by name and status. Nothing is
+grabbed or sent until you click.
 
 **Naming your sessions.** The names in that list are auto-generated
 (`yourname-a1`) unless you set them. Start a session with `claude -n crm` and it

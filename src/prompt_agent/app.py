@@ -1158,13 +1158,57 @@ class App:
         you see on the left is what the other session gets."""
         if not self.outgoing():
             return
-        title = "Send this to which terminal?"
+        # If we grabbed from a terminal, that IS the destination -- picking it
+        # out of a list again asks a question whose answer is already known.
+        # It still has to be re-resolved: the session may have exited since.
         was = getattr(self, "grabbed_from", "")
         if was:
-            title = "Send this back to %s?" % was
+            for peer in live_sessions():
+                if peer["name"] == was and peer["pid"] != os.getpid():
+                    self.confirm_send(peer)
+                    return
+            self.status.config(
+                text="%s is no longer running — pick another" % was)
         # Showing the actual text removes the guesswork about whether the
         # agent's last message was advice for you or a reply for the terminal.
-        self.pick_session(title, self._deliver, preview=self.outgoing())
+        self.pick_session("Send this to which terminal?", self._deliver,
+                          preview=self.outgoing())
+
+    def confirm_send(self, peer):
+        """One look at what goes where, then send. No list to walk."""
+        text = self.outgoing()
+        win = tk.Toplevel(self.root)
+        win.title("Send")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        tk.Label(win, text="Send this back to %s?" % peer["name"], bg=BG,
+                 fg=FG, font=self.ui).pack(padx=14, pady=(12, 8), anchor="w")
+        box = tk.Text(win, height=6, width=54, bg=FIELD, fg=FG,
+                      font=self.mono, relief="flat", wrap="word", padx=8,
+                      pady=6, highlightthickness=0, bd=0)
+        box.insert("1.0", text)
+        box.config(state="disabled")
+        box.pack(padx=14, pady=(0, 10), fill="x")
+        row = tk.Frame(win, bg=BG)
+        row.pack(padx=14, pady=(0, 12), fill="x")
+        RoundButton(row, "Send to %s" % peer["name"],
+                    lambda: (win.destroy(), self._deliver(peer)),
+                    self.ui, ACCENT, "#1c1c1e",
+                    hover="#ffa76b").pack(side="left")
+        other = tk.Label(row, text="another terminal", bg=BG, fg=MUTED,
+                         font=self.ui, padx=10, cursor="hand2")
+        other.pack(side="left")
+        other.bind("<Button-1>", lambda e: (
+            win.destroy(),
+            self.pick_session("Send this to which terminal?", self._deliver,
+                              preview=text)))
+        cancel = tk.Label(row, text="cancel", bg=BG, fg=MUTED, font=self.ui,
+                          padx=6, cursor="hand2")
+        cancel.pack(side="right")
+        cancel.bind("<Button-1>", lambda e: win.destroy())
+        win.update_idletasks()
+        win.geometry("+%d+%d" % (self.root.winfo_rootx() + 40,
+                                 self.root.winfo_rooty() + 60))
 
     def _deliver(self, peer):
         """Hand the reply to the chosen session, off the UI thread."""
