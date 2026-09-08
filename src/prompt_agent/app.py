@@ -401,7 +401,7 @@ class App:
         panes = tk.Frame(self.body, bg=BG)
         panes.pack(fill="both", expand=True, padx=8, pady=(0, 6))
 
-        left = tk.Frame(panes, bg=BG)
+        left = self.leftpane = tk.Frame(panes, bg=BG)
         left.pack(side="left", fill="both", expand=True)
         tk.Label(left, text="PROMPT", bg=BG, fg=MUTED, font=self.ui,
                  anchor="w").pack(fill="x", pady=(0, 3))
@@ -412,7 +412,7 @@ class App:
             relief="flat", wrap="word", padx=4, pady=2, highlightthickness=0,
             bd=0))
 
-        right = tk.Frame(panes, bg=BG, width=300)
+        right = self.rightpane = tk.Frame(panes, bg=BG, width=300)
         right.pack(side="right", fill="both", expand=True, padx=(8, 0))
         tk.Label(right, text="CHAT", bg=BG, fg=MUTED, font=self.ui,
                  anchor="w").pack(fill="x", pady=(0, 3))
@@ -430,11 +430,13 @@ class App:
         self.chat.bind("<Button-5>", self.on_wheel)
 
         # --- input row: one box for both the first prompt and every reply
-        entrywrap = RoundFrame(self.body, FIELD, radius=12, height=88)
+        # Two rows, not four: the box only holds a sentence or a pasted
+        # paragraph, and the height it was taking came out of the panes.
+        entrywrap = RoundFrame(self.body, FIELD, radius=12, height=56)
         entrywrap.pack(padx=8, pady=(0, 6), fill="x")
         entrywrap.pack_propagate(False)
         self.entry = entrywrap.hold(tk.Text(
-            entrywrap, height=4, bg=FIELD, fg=FG, insertbackground=FG,
+            entrywrap, height=2, bg=FIELD, fg=FG, insertbackground=FG,
             font=self.mono, relief="flat", wrap="word", padx=4, pady=2,
             highlightthickness=0, bd=0))
         self.entry.bind("<Control-Return>", lambda e: (self.send(), "break"))
@@ -488,6 +490,18 @@ class App:
         return self.chat.create_polygon(pts, fill=fill, outline=fill,
                                         smooth=True, splinesteps=12)
 
+    def prompt_pane(self, show):
+        """Advise has no prompt to copy, so the left pane steps aside and the
+        chat takes the whole window. Re-packed before the chat frame to keep
+        PROMPT on the left when it comes back."""
+        packed = bool(self.leftpane.winfo_manager())
+        if show and not packed:
+            self.leftpane.pack(side="left", fill="both", expand=True,
+                               before=self.rightpane)
+        elif not show and packed:
+            self.leftpane.pack_forget()
+        self.root.after(30, self.relayout)
+
     def say(self, who, text, err=False):
         self.msgs.append((who, text.strip(), err))
         self.relayout()
@@ -501,7 +515,10 @@ class App:
         if pane <= 1:                        # not mapped yet
             return
         pad, gap, radius = 10, 8, 12
-        maxw = max(120, int(pane * 0.78))    # leaves the other side showing
+        # Advice answers are long, so they get more of the pane. A rewrite
+        # thread stays at 78% so you can still see which side a bubble is on.
+        share = 0.92 if getattr(self, "mode", "rewrite") == "advise" else 0.78
+        maxw = max(120, int(pane * share))
         y = pad
 
         for who, text, err in self.msgs:
@@ -656,6 +673,11 @@ class App:
             except (TypeError, ValueError):
                 continue
             self.say(who, text, err=err)
+        # No saved prompt but a thread present means the last session was
+        # advice, which keeps everything in the chat.
+        if msgs and not result:
+            self.mode = "advise"
+            self.prompt_pane(False)
         self.status.config(
             text="picked up where you left off — New starts over")
 
@@ -666,6 +688,8 @@ class App:
         self.chat.delete("all")
         self.out.delete("1.0", "end")
         self.copybtn.config(state="disabled")
+        self.mode = "rewrite"
+        self.prompt_pane(True)
         self.status.config(text="paste a prompt — enter to send")
         self.entry.focus_set()
         try:
@@ -714,6 +738,7 @@ class App:
                                    or mode in ("translate", "advise"))
         if not follow_up:
             self.mode = mode
+        self.prompt_pane(self.mode != "advise")
         threading.Thread(
             target=lambda: self.q.put(run_claude(payload, self.session, first)),
             daemon=True).start()
@@ -751,15 +776,11 @@ class App:
                 self.started = True
                 prompt, aside = split_output(payload)
                 if getattr(self, "mode", "rewrite") == "advise" and not prompt:
-                    # Advice is prose, not a fenced prompt, so it goes to the
-                    # big pane where it is readable. The chat gets a short
-                    # marker instead of the whole answer: repeating hundreds
-                    # of words in the narrow strip buries the thread it is
-                    # meant to show.
-                    prompt = payload.strip()
-                    first_line = prompt.split("\n")[0].strip()
-                    aside = (first_line[:117] + "..."
-                             if len(first_line) > 120 else first_line)
+                    # In advise mode the answer IS the deliverable -- there is
+                    # no prompt to copy. It goes to the chat in full, and the
+                    # prompt pane hides so the thread gets the whole window.
+                    # Truncating it into a bubble read as a cut-off answer.
+                    aside = payload.strip()
                 if prompt:
                     self.result = prompt
                     self.out.delete("1.0", "end")
