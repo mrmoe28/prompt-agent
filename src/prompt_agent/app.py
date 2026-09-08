@@ -378,6 +378,7 @@ class RoundButton(tk.Canvas):
                  hover=None, pad=(14, 5), radius=9, **kw):
         self.font, self.txt = font, text
         self.bg, self.fg = bg, fg
+        self._base_bg, self._base_fg = bg, fg
         self.hover = hover or bg
         self.command, self.state = command, "normal"
         self.radius = radius
@@ -404,6 +405,15 @@ class RoundButton(tk.Canvas):
     def _click(self, _):
         if self.state == "normal" and self.command:
             self.command()
+
+    def highlight(self, on):
+        """Tint the pill to point at the button the next step wants."""
+        want = ACCENT if on else self._base_bg
+        if want == self.bg:
+            return
+        self.bg = want
+        self.fg = "#1c1c1e" if on else self._base_fg
+        self._draw(self.bg)
 
     def config(self, **kw):                     # only what the app calls
         if "state" in kw:
@@ -577,6 +587,10 @@ class App:
         self.entry.bind("<Control-Return>", lambda e: (self.send(), "break"))
         self.wire_edit_keys(self.entry)
         self.entry.bind("<Return>", self.on_return)
+        # An empty dark box reads as disabled. A greyed hint says it is a
+        # place to type, and which button the typing is headed for.
+        self.hint_on = False
+        self.entry.bind("<Key>", self.on_key)
 
         row = tk.Frame(self.body, bg=BG)
         row.pack(fill="x", padx=8, pady=(0, 8))
@@ -624,6 +638,7 @@ class App:
         # Clicking a widget should put the caret in that widget, including the
         # BLANKS fields -- see claim_focus.
         root.bind_all("<Button-1>", self.claim_focus, add="+")
+        self.hint_show("type or paste here…")
 
     # --- chat pane
     def round_rect(self, x1, y1, x2, y2, r, fill):
@@ -813,6 +828,32 @@ class App:
             self.body.pack_forget()
             self.root.geometry("")
 
+    def hint_show(self, text):
+        """Grey placeholder, only while the box is genuinely empty."""
+        if self.entry.get("1.0", "end").strip():
+            return
+        self.hint_on = True
+        self.entry.delete("1.0", "end")
+        self.entry.insert("1.0", text)
+        self.entry.config(fg=MUTED)
+
+    def on_key(self, ev):
+        """Real typing clears the placeholder; arrows and modifiers do not."""
+        if ev.char and ev.char.isprintable():
+            self.hint_clear()
+
+    def hint_clear(self):
+        if getattr(self, "hint_on", False):
+            self.hint_on = False
+            self.entry.delete("1.0", "end")
+            self.entry.config(fg=FG)
+
+    def typed(self):
+        """What the user actually wrote -- never the placeholder."""
+        if getattr(self, "hint_on", False):
+            return ""
+        return self.entry.get("1.0", "end").strip()
+
     def on_return(self, _):
         """Enter sends; shift+enter is a newline (handled by not binding it)."""
         self.send()
@@ -859,6 +900,7 @@ class App:
         self.mode = "rewrite"
         self.prompt_pane(True)
         self.status.config(text="paste a prompt — enter to send")
+        self.hint_show("type or paste here…")
         self.entry.focus_set()
         try:
             os.remove(STATE)
@@ -867,9 +909,10 @@ class App:
 
     # --- run
     def send(self, mode="rewrite"):
+        self.askbtn.highlight(False)
         if self.busy:
             return
-        text = self.entry.get("1.0", "end").strip()
+        text = self.typed()
         if not text:
             return
         follow_up = False
@@ -977,6 +1020,11 @@ class App:
             save_state(self.session, self.started, self.result, self.msgs)
             if getattr(self, "mode", "rewrite") == "advise":
                 self.status.config(text="advice above — reply to dig in")
+                self.hint_show("ask a follow-up…")
+                # Advice writes no prompt, but it is still text you may want
+                # to hand to a terminal, so Send to stays usable.
+                if self.outgoing():
+                    self.sendtobtn.config(state="normal")
             elif not prompt:
                 # A question answered in the chat: the prompt on the left
                 # is untouched and still the thing worth copying.
@@ -987,6 +1035,7 @@ class App:
                 # The prompt is always usable -- a question is optional.
                 self.status.config(
                     text="ready to copy — reply only if you want to refine")
+                self.hint_show("reply to refine it…")
         else:
             self.say("agent", payload, err=True)
             self.status.config(text="failed")
@@ -1015,10 +1064,16 @@ class App:
         self.grabbed_from = peer["name"]
         # Whatever was half-typed in the box is not worth silently destroying;
         # putting it back is one click on "undo grab".
-        self.pre_grab = self.entry.get("1.0", "end").strip()
+        self.pre_grab = self.typed()
+        self.hint_on = False
+        self.entry.config(fg=FG)
         self.entry.delete("1.0", "end")
         self.entry.insert("1.0", text)
         self.entry.focus_set()
+        # A grabbed question wants Explain, not Advise. The status line said
+        # so and got missed under a wall of grabbed text, so the button
+        # itself now says it.
+        self.askbtn.highlight(True)
         if self.pre_grab:
             self.status.config(text="grabbed from %s — press Explain "
                                     "(undo grab restores your text)"
@@ -1071,13 +1126,26 @@ class App:
         win.geometry("+%d+%d" % (self.root.winfo_rootx() + 40,
                                  self.root.winfo_rooty() + 60))
 
+    def outgoing(self):
+        """The text Send to would deliver.
+
+        Normally the prompt pane -- that is what Explain drafts and what Copy
+        yields. In advise mode there is no prompt pane, and the answer itself
+        is the thing worth sending, so the last agent message stands in."""
+        if self.result:
+            return self.result
+        for who, text, err in reversed(self.msgs):
+            if who == "agent" and not err:
+                return text
+        return ""
+
     def send_to(self):
         """Deliver the drafted reply to whichever terminal asked the question.
 
         You pick the session by name; nothing is sent until you click one. The
         text delivered is exactly what Copy would put on the clipboard, so what
         you see on the left is what the other session gets."""
-        if not self.result:
+        if not self.outgoing():
             return
         title = "Send this reply to which terminal?"
         was = getattr(self, "grabbed_from", "")
@@ -1087,7 +1155,7 @@ class App:
 
     def _deliver(self, peer):
         """Hand the reply to the chosen session, off the UI thread."""
-        text = self.result
+        text = self.outgoing()
         name = peer["name"]
         self.sendtobtn.config(state="disabled")
         self.status.config(text="sending to %s…" % name)

@@ -80,8 +80,11 @@ follow, the round trip is three clicks:
 1. **Grab** — pick that terminal from the list; its last message drops into the
    input box. (Or just paste the question yourself, if you'd rather.)
 2. **Explain** — you get the question in plain words, plus a drafted reply.
+   (Explain, not Advise: Advise answers *you* and writes no reply to paste.
+   After a grab the Explain button lights up so the right one is obvious.)
 3. **Send to** — the reply goes back to that terminal. It offers the one you
-   grabbed from, so you don't hunt for it twice.
+   grabbed from, so you don't hunt for it twice. In Advise mode, where there is
+   no drafted reply, it sends the answer itself.
 
 Both lists show the Claude Code sessions currently running on your machine, by
 name and status. Nothing is grabbed or sent until you click one.
