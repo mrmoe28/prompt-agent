@@ -56,7 +56,7 @@ CLAUDE = find_claude()
 
 def config_dir():
     """Per-user data lives outside the package: an installed package sits in
-    a venv that gets replaced on upgrade, taking facts.md with it."""
+    a venv that gets replaced on upgrade, taking the saved thread with it."""
     if os.name == "nt":
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
     elif sys.platform == "darwin":
@@ -70,7 +70,6 @@ def config_dir():
 
 
 CONFIG = config_dir()
-FACTS = os.path.join(CONFIG, "facts.md")
 STATE = os.path.join(CONFIG, ".session.json")
 
 
@@ -89,25 +88,6 @@ def open_in_editor(path):
 SKILL_SRC = os.path.join(HERE, "skills", "prompt-rewrite.md")
 SKILL_DST = os.path.expanduser(
     os.path.join("~", ".claude", "skills", "prompt-rewrite", "SKILL.md"))
-
-FACTS_TEMPLATE = """# Standing facts
-
-Facts the rewriter should assume instead of asking about. Edit this file
-whenever something changes -- everything here is injected into every rewrite,
-so a fact listed here never comes back as [NEEDED: ...].
-
-Delete a line if it stops being true. A bullet still holding a [placeholder]
-is treated as unfilled and is skipped.
-
-## Me
-
-- Name: [your name]
-- Business: [what you do, in one line]
-
-## Defaults
-
-- [anything you always want assumed -- tone, format, house rules]
-"""
 
 
 def ensure_skill():
@@ -132,81 +112,24 @@ def ensure_skill():
         return False
 
 
-def ensure_facts():
-    """Create a starter facts.md the first time, so the facts button always
-    opens something instead of failing on a missing file."""
-    try:
-        if not os.path.exists(FACTS):
-            with open(FACTS, "w") as f:
-                f.write(FACTS_TEMPLATE)
-            return True
-    except OSError:
-        pass
-    return False
-
-
-def load_facts():
-    """Standing facts, injected into turn 1 so they never come back as
-    [NEEDED: ...].
-
-    Only "- " bullets under "## " headings are facts; the prose at the top is
-    instructions to the human. A bullet still holding a [placeholder] is an
-    unfilled template and is dropped -- handing one over would plant an
-    invented fact in every prompt. A bullet can wrap onto continuation lines,
-    so it is assembled whole before that check."""
-    try:
-        with open(FACTS) as f:
-            raw = f.read()
-    except OSError:
-        return ""
-
-    out, bullet, heading = [], None, None
-
-    def flush():
-        if bullet and "[" not in " ".join(bullet):
-            if heading and heading not in out:
-                out.append(heading)
-            out.append(" ".join(bullet))
-
-    for ln in raw.splitlines():
-        s = ln.strip()
-        if s.startswith("##"):
-            flush()
-            bullet, heading = None, s
-        elif s.startswith("- "):
-            flush()
-            bullet = [s]
-        elif s and bullet is not None:
-            bullet.append(s)          # wrapped continuation of this bullet
-        else:
-            flush()
-            bullet = None
-    flush()
-    return "\n".join(out).strip()
-
 # The pad is a rewrite tool, not an intake interview. The usable prompt is the
 # deliverable every single turn; a question is optional and never a gate.
 STYLE = (
     "This is a quick rewrite pad, not an interview. Always return the finished "
-    "prompt. Do not interrogate the user: skip the question entirely unless one "
-    "unknown genuinely changes the prompt, and then ask at most ONE short "
-    "question -- never two joined by 'and'. Mark other unknowns [NEEDED: ...] "
-    "inside the prompt rather than asking about them. The user can ignore any "
-    "question and still have something they can paste. "
-    "Use [NEEDED: ...] ONLY as an actual blank standing where a missing fact "
-    "goes. Never mention the marker in an instruction to the reader -- do not "
-    "write sentences like 'mark unverified facts [NEEDED: ...]'. If nothing is "
-    "missing, the prompt contains no [NEEDED] at all.\n\n"
-    "Some input is a QUESTION, not a job to do -- the user wants an opinion, "
-    "an explanation, a comparison or a recommendation. Recognise that case and "
-    "rewrite it as a sharper version of the SAME question. Then: no Task / "
-    "Constraints / Deliverable / Done-when sections, and NO [NEEDED] blanks at "
-    "all. A question does not need a repo name, a file path, a framework or a "
-    "success criterion -- if the answer would change depending on some detail, "
-    "write that into the question as a plain clause ('...and say what it "
-    "depends on') instead of demanding the detail up front. Keep the user's "
-    "own words and their level of technical language; sharpen the question, do "
-    "not make it sound like an engineer wrote it."
+    "text and nothing else. Never interrogate the user and never ask a "
+    "follow-up question.\n\n"
+    "Never leave a blank, a placeholder, or a bracketed marker of any kind for "
+    "the user to fill in. If a detail is missing, either write the text so it "
+    "does not need that detail, or fold it in as a plain clause the reader can "
+    "answer ('...and say what that depends on'). The user must always be able "
+    "to paste the result immediately, with no editing.\n\n"
+    "If the input is a QUESTION -- an opinion, an explanation, a comparison, a "
+    "recommendation -- rewrite it as a sharper version of the SAME question. "
+    "No Task / Constraints / Deliverable / Done-when sections. Keep the user's "
+    "own words and their level of technical language: sharpen the question, do "
+    "not make it sound like an engineer wrote it.\n\n"
+    "If the input is a job to be done, write the shortest prompt that makes "
+    "the assignment clear, using only the sections that genuinely help."
 )
 
 # Translate mode. The opposite of STYLE: here the questions ARE the point.
@@ -387,61 +310,6 @@ def load_state():
         return None
 
 
-def save_fact(label, value):
-    """Append one answered blank to facts.md so it is never asked again.
-
-    Written under a "## Learned" heading so hand-written sections stay as the
-    user arranged them. Returns False if the fact is already recorded --
-    re-answering the same blank must not stack duplicate lines."""
-    line = f"- {label.strip().rstrip(':')}: {value.strip()}"
-    try:
-        try:
-            with open(FACTS) as f:
-                cur = f.read()
-        except OSError:
-            cur = ""
-        if line in cur:
-            return False
-        if "## Learned" not in cur:
-            cur = cur.rstrip() + "\n\n## Learned\n\n"
-        else:
-            cur = cur.rstrip() + "\n"
-        with open(FACTS, "w") as f:
-            f.write(cur + line + "\n")
-        return True
-    except OSError:
-        return False
-
-
-def find_blanks(prompt):
-    """Every [NEEDED: ...] in the prompt, as (whole_marker, label).
-
-    Scanned with a bracket counter rather than a regex so a label that itself
-    contains brackets still yields one blank instead of a truncated one.
-    Duplicates collapse: the same question asked twice gets one box, and
-    filling it replaces every copy."""
-    out, i, seen = [], 0, set()
-    while True:
-        i = prompt.find("[NEEDED", i)
-        if i < 0:
-            return out
-        depth, j = 0, i
-        while j < len(prompt):
-            if prompt[j] == "[":
-                depth += 1
-            elif prompt[j] == "]":
-                depth -= 1
-                if depth == 0:
-                    break
-            j += 1
-        if depth:                       # unclosed marker -- ignore it
-            return out
-        whole = prompt[i:j + 1]
-        label = whole[len("[NEEDED"):-1].lstrip(":").strip() or "value"
-        if whole not in seen:
-            seen.add(whole)
-            out.append((whole, label))
-        i = j + 1
 
 
 class RoundFrame(tk.Canvas):
@@ -515,10 +383,6 @@ class App:
                                font=self.ui, padx=8, cursor="hand2")
         self.newbtn.pack(side="right")
         self.newbtn.bind("<Button-1>", lambda e: self.reset())
-        self.factbtn = tk.Label(self.bar, text="facts", bg=BG, fg=MUTED,
-                                font=self.ui, padx=8, cursor="hand2")
-        self.factbtn.pack(side="right")
-        self.factbtn.bind("<Button-1>", lambda e: self.edit_facts())
 
         # --- body: prompt pane | chat pane
         self.body = tk.Frame(root, bg=BG)
@@ -535,21 +399,6 @@ class App:
             outwrap, height=20, width=48, bg=PANE, fg=FG, font=self.mono,
             relief="flat", wrap="word", padx=4, pady=2, highlightthickness=0,
             bd=0))
-
-        # --- BLANKS: one field per [NEEDED: ...] the rewrite left behind.
-        # Packed only when there is something to fill in.
-        self.blanks_wrap = tk.Frame(left, bg=BG)
-        hdr = tk.Frame(self.blanks_wrap, bg=BG)
-        hdr.pack(fill="x", pady=(8, 3))
-        tk.Label(hdr, text="BLANKS", bg=BG, fg=ACCENT, font=self.ui,
-                 anchor="w").pack(side="left")
-        self.fillbtn = RoundButton(hdr, "Fill in", self.fill_blanks, self.ui,
-                                   ACCENT, "#1c1c1e", hover="#ffa76b",
-                                   pad=(12, 3))
-        self.fillbtn.pack(side="right")
-        self.blanks_box = tk.Frame(self.blanks_wrap, bg=PANE)
-        self.blanks_box.pack(fill="x")
-        self.blank_rows = []            # (marker, Entry)
 
         right = tk.Frame(panes, bg=BG, width=300)
         right.pack(side="right", fill="both", expand=True, padx=(8, 0))
@@ -776,76 +625,6 @@ class App:
         self.send()
         return "break"
 
-    # --- blanks
-    def show_blanks(self):
-        """Rebuild the fill-in fields from whatever the current prompt needs."""
-        for w in self.blanks_box.winfo_children():
-            w.destroy()
-        self.blank_rows = []
-
-        blanks = find_blanks(self.result)
-        if not blanks:
-            self.blanks_wrap.pack_forget()
-            return
-
-        for marker, label in blanks:
-            row = tk.Frame(self.blanks_box, bg=PANE)
-            row.pack(fill="x", padx=6, pady=3)
-            tk.Label(row, text=label, bg=PANE, fg=MUTED, font=self.ui,
-                     anchor="w", wraplength=360, justify="left").pack(fill="x")
-            e = tk.Entry(row, bg=FIELD, fg=FG, insertbackground=FG,
-                         font=self.mono, relief="flat", highlightthickness=1,
-                         highlightbackground=FIELD, highlightcolor=ACCENT)
-            e.pack(fill="x", ipady=3, pady=(2, 0))
-            e.bind("<Return>", lambda ev: (self.fill_blanks(), "break"))
-            self.wire_edit_keys(e)
-            # Ticked by default: a fact worth typing once is nearly always
-            # worth keeping, and an unwanted line is one edit away.
-            keep = tk.BooleanVar(value=True)
-            tk.Checkbutton(row, text="remember this", variable=keep,
-                           bg=PANE, fg=MUTED, font=self.ui,
-                           selectcolor=FIELD, activebackground=PANE,
-                           activeforeground=FG, bd=0, highlightthickness=0,
-                           anchor="w").pack(fill="x", pady=(1, 0))
-            self.blank_rows.append((marker, e, keep, label))
-
-        self.blanks_wrap.pack(fill="x")
-
-    def fill_blanks(self):
-        """Substitute the filled-in answers into the prompt.
-
-        Only non-empty fields are substituted, so a blank you skip stays a
-        visible [NEEDED: ...] rather than collapsing into an empty string --
-        an unnoticed empty slot is worse than an obvious marker."""
-        filled, learned = 0, 0
-        for marker, entry, keep, label in self.blank_rows:
-            val = entry.get().strip()
-            if val:
-                self.result = self.result.replace(marker, val)
-                filled += 1
-                if keep.get() and save_fact(label, val):
-                    learned += 1
-        if not filled:
-            self.status.config(text="nothing filled in yet")
-            return
-        self.out.delete("1.0", "end")
-        self.out.insert("1.0", self.result)
-        self.show_blanks()
-        left = len(self.blank_rows)
-        tail = f" — {left} left" if left else " — ready to copy"
-        note = f", {learned} saved to facts" if learned else ""
-        self.status.config(text=f"filled {filled}{note}{tail}")
-
-    def edit_facts(self):
-        """Open facts.md in the desktop's default editor."""
-        try:
-            ensure_facts()
-            open_in_editor(FACTS)
-            self.status.config(text="facts.md opened — saved edits apply to "
-                                    "the next new prompt")
-        except OSError as exc:
-            self.status.config(text=f"could not open facts.md: {exc}")
-
     def restore(self):
         """Bring back the thread from the last time the pad was open."""
         got = load_state()
@@ -859,7 +638,6 @@ class App:
             self.out.delete("1.0", "end")
             self.out.insert("1.0", result)
             self.copybtn.config(state="normal")
-            self.show_blanks()
         for m in msgs:
             try:
                 who, text, err = m
@@ -876,7 +654,6 @@ class App:
         self.chat.delete("all")
         self.out.delete("1.0", "end")
         self.copybtn.config(state="disabled")
-        self.show_blanks()
         self.status.config(text="paste a prompt — enter to send")
         self.entry.focus_set()
         try:
@@ -897,20 +674,13 @@ class App:
             # thing.
             self.session = str(uuid.uuid4())
             self.started = False
-            facts = load_facts()
-            known = (f"\n\nStanding facts about me:\n{facts}"
-                     if facts else "")
             if mode == "advise":
-                payload = f"{ADVISE}\n\nMy question:\n{text}{known}"
+                payload = f"{ADVISE}\n\nMy question:\n{text}"
             else:
-                payload = f"{ASK}\n\nThe agent asked:\n{text}{known}"
+                payload = f"{ASK}\n\nThe agent asked:\n{text}"
         elif not self.started:
             self.session = str(uuid.uuid4())
-            facts = load_facts()
-            known = (f"\n\nStanding facts about me -- use these directly, and "
-                     f"never ask about or mark [NEEDED] anything answered "
-                     f"here:\n{facts}" if facts else "")
-            payload = f"/{SKILL} {text}{known}\n\n{STYLE}"
+            payload = f"/{SKILL} {text}\n\n{STYLE}"
         else:
             payload = (f"{text}\n\nReturn the full revised prompt in a fenced "
                        f"block. {STYLE}")
@@ -969,7 +739,6 @@ class App:
                     self.out.delete("1.0", "end")
                     self.out.insert("1.0", prompt)
                     self.copybtn.config(state="normal")
-                    self.show_blanks()
                 if aside:
                     self.say("agent", aside)
                 elif getattr(self, "mode", "rewrite") != "advise":
@@ -1003,7 +772,6 @@ def _report(exc, val, tb):
 def main():
     """Console entry point (`prompt-agent`)."""
     ensure_skill()
-    ensure_facts()
     tk.Tk.report_callback_exception = staticmethod(_report)
     try:
         r = tk.Tk(className="Prompt-agent")

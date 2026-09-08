@@ -46,55 +46,20 @@ The app runs fine without it.
 
 ## First run
 
-Two things are created for you:
+The **`prompt-rewrite` skill** is copied into `~/.claude/skills/` — the pad
+invokes it, so without it the first turn fails. An existing file of that name
+is left untouched.
 
-1. **The `prompt-rewrite` skill** is copied into `~/.claude/skills/` — the pad
-   invokes it, so without it the first turn fails. An existing file of that
-   name is left untouched.
-2. **A starter `facts.md`** in your config directory.
+## Where your thread is saved
 
-## facts.md — the part worth five minutes
-
-Standing facts get injected into every rewrite, so the agent never asks you the
-same background question twice. Click **facts** in the pad to open it.
-
-```markdown
-## Me
-
-- Name: Dana
-- Business: a two-person bike repair shop in Portland
-
-## Defaults
-
-- Never invent numbers or testimonials; every claim traces to a source I supply.
-```
-
-Only `- ` bullets under a `## ` heading count. A bullet still containing a
-`[placeholder]` is treated as unfilled and skipped, so a half-edited template
-never leaks made-up facts into your prompts.
-
-Where it lives:
+Your conversation is saved outside the package, so closing the pad and
+reopening it picks the thread back up.
 
 | OS | Path |
 | --- | --- |
 | Linux | `~/.config/prompt-agent/` |
 | macOS | `~/Library/Application Support/prompt-agent/` |
 | Windows | `%APPDATA%\prompt-agent\` |
-
-Your conversation is saved beside it, so closing the pad and reopening it picks
-the thread back up.
-
-## Filling in the blanks
-
-When a rewrite needs a fact only you have, it comes back marked
-`[NEEDED: ...]` and the pad shows a fill-in box for each one. Type the answer,
-click **Fill in**, and it drops into the prompt.
-
-Each blank has a **remember this** checkbox, ticked by default — answers get
-appended to `facts.md` so you are never asked again. Untick it for a one-off.
-
-Don't have the answer? Leave it blank. The `[NEEDED: ...]` marker stays in the
-prompt, and the agent you paste it into will ask you or work it out.
 
 ## Configuration
 
