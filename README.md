@@ -13,7 +13,9 @@ Four buttons, one text box:
 | **Advise** | Ask a straight question. Get an answer with a recommendation, the tradeoff, and the next step — not a menu. |
 | **Grab** | Pull the last thing another Claude Code session said into the box, so you don't have to copy it across. |
 
-The **Copy** button always copies whatever is in the left pane. **Send to**
+The **Copy** button always copies whatever is in the left pane. Advise and
+Explain give the chat the whole window; **show prompt** in the header brings
+your rewritten prompt back, and it is never lost in the meantime. **Send to**
 delivers that same text to another Claude Code session on your machine — see
 [Talking to your other terminals](#talking-to-your-other-terminals).
 
@@ -88,6 +90,9 @@ name and status. Nothing is grabbed or sent until you click one.
 (`yourname-a1`) unless you set them. Start a session with `claude -n crm` and it
 shows up as `crm`, which makes the picker readable when several are open. The
 name is set at launch; there's no way to rename a running session.
+
+Grab replaces whatever is in the input box. If you had something typed there,
+**undo grab** in the header puts it back.
 
 Grab reads that session's transcript on disk, so it sees what the agent last
 said — not what's scrolled on your screen. A session that hasn't answered

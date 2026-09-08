@@ -519,6 +519,17 @@ class App:
                                font=self.ui, padx=8, cursor="hand2")
         self.newbtn.pack(side="right")
         self.newbtn.bind("<Button-1>", lambda e: self.reset())
+        # Advise and Explain hide the prompt pane, which used to strand a
+        # rewritten prompt off-screen with no way back to it. This is that way
+        # back; it only appears once there is a prompt worth returning to.
+        self.panebtn = tk.Label(self.bar, text="", bg=BG, fg=ACCENT,
+                                font=self.ui, padx=8, cursor="hand2")
+        self.panebtn.pack(side="right")
+        self.panebtn.bind("<Button-1>", lambda e: self.toggle_pane())
+        self.undobtn = tk.Label(self.bar, text="", bg=BG, fg=MUTED,
+                                font=self.ui, padx=8, cursor="hand2")
+        self.undobtn.pack(side="right")
+        self.undobtn.bind("<Button-1>", lambda e: self.undo_grab())
 
         # --- body: prompt pane | chat pane
         self.body = tk.Frame(root, bg=BG)
@@ -635,7 +646,25 @@ class App:
                                before=self.rightpane)
         elif not show and packed:
             self.leftpane.pack_forget()
+        self.pane_label()
         self.root.after(30, self.relayout)
+
+    def pane_label(self):
+        """Show the way back only when there is something to go back to."""
+        if not getattr(self, "panebtn", None):
+            return
+        if not self.result:
+            self.panebtn.config(text="")
+        elif self.leftpane.winfo_manager():
+            self.panebtn.config(text="hide prompt")
+        else:
+            self.panebtn.config(text="show prompt")
+
+    def toggle_pane(self):
+        """Bring the prompt back, or step it aside again."""
+        if not self.result:
+            return
+        self.prompt_pane(not self.leftpane.winfo_manager())
 
     def say(self, who, text, err=False):
         self.msgs.append((who, text.strip(), err))
@@ -803,6 +832,7 @@ class App:
             self.out.insert("1.0", result)
             self.copybtn.config(state="normal")
             self.sendtobtn.config(state="normal")
+            self.pane_label()
         for m in msgs:
             try:
                 who, text, err = m
@@ -825,6 +855,7 @@ class App:
         self.out.delete("1.0", "end")
         self.copybtn.config(state="disabled")
         self.sendtobtn.config(state="disabled")
+        self.pane_label()
         self.mode = "rewrite"
         self.prompt_pane(True)
         self.status.config(text="paste a prompt — enter to send")
@@ -938,6 +969,7 @@ class App:
                 self.out.insert("1.0", prompt)
                 self.copybtn.config(state="normal")
                 self.sendtobtn.config(state="normal")
+                self.pane_label()
             if aside:
                 self.say("agent", aside)
             elif prompt:
@@ -981,11 +1013,36 @@ class App:
         # Remembered so Send to can offer the same terminal back without
         # making you find it in the list a second time.
         self.grabbed_from = peer["name"]
+        # Whatever was half-typed in the box is not worth silently destroying;
+        # putting it back is one click on "undo grab".
+        self.pre_grab = self.entry.get("1.0", "end").strip()
         self.entry.delete("1.0", "end")
         self.entry.insert("1.0", text)
         self.entry.focus_set()
-        self.status.config(
-            text="grabbed from %s — press Explain" % peer["name"])
+        if self.pre_grab:
+            self.status.config(text="grabbed from %s — press Explain "
+                                    "(undo grab restores your text)"
+                                    % peer["name"])
+        else:
+            self.status.config(
+                text="grabbed from %s — press Explain" % peer["name"])
+        self.undo_label()
+
+    def undo_label(self):
+        """Offer the typed-over text back, and only while it exists."""
+        if not getattr(self, "undobtn", None):
+            return
+        self.undobtn.config(text="undo grab" if getattr(self, "pre_grab", "")
+                            else "")
+
+    def undo_grab(self):
+        if not getattr(self, "pre_grab", ""):
+            return
+        self.entry.delete("1.0", "end")
+        self.entry.insert("1.0", self.pre_grab)
+        self.pre_grab = ""
+        self.undo_label()
+        self.status.config(text="your text is back")
 
     def pick_session(self, title, on_pick):
         """A small list of the live sessions. Nothing happens until a click."""
