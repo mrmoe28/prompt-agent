@@ -9,6 +9,7 @@ The thread is a real Claude Code session -- turn 1 creates it with a fixed
 --session-id, later turns --resume it -- so the agent remembers the prompt it
 already wrote instead of starting over from the raw text each time."""
 
+import json
 import os
 import queue
 import shutil
@@ -22,7 +23,12 @@ from tkinter import font as tkfont
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL = "prompt-rewrite"
 TIMEOUT = 180
+# Send and Explain must never execute the task they are describing -- that is
+# what makes their output safe to paste anywhere. Advise is different: there you
+# are asking the agent to actually do something, so it gets tools.
 NO_TOOLS = ["Write", "Edit", "Bash", "Agent", "Task"]
+ADVISE_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash",
+                "ListAgents", "SendMessage"]
 
 
 def find_claude():
@@ -145,7 +151,7 @@ REPLY = (
 )
 
 # Translate mode. The opposite of STYLE: here the questions ARE the point.
-# The agent's job is to decode jargon and hand back a reply Moe can paste.
+# The agent's job is to decode jargon and hand back a reply you can paste.
 ASK = (
     "Below is a question a coding agent asked me. I am not a developer and "
     "some of the wording is over my head.\n\n"
@@ -177,7 +183,16 @@ ADVISE = (
     "3. If there is an obvious next step I should take, say it in one line.\n\n"
     "If something you would need is missing, make the most reasonable "
     "assumption, say in one line what you assumed, and still give me a "
-    "straight answer. Never end with only a question."
+    "straight answer. Never end with only a question.\n\n"
+    "You have real tools here: you can read and write files, run commands, "
+    "list my other Claude Code sessions (ListAgents) and send them messages "
+    "(SendMessage). Use them when they answer the question better than "
+    "guessing would -- check the file rather than assuming what is in it.\n\n"
+    "Two rules on those tools. Do not change files or run anything that "
+    "alters my system unless I asked for that in the message you are "
+    "answering; reading, checking and reporting are always fine. And never "
+    "message another session without me asking you to -- if I do ask, say "
+    "which session you sent it to and what you said."
 )
 
 BG = "#1c1c1e"
@@ -191,12 +206,16 @@ BUB_THEM = "#26262a"    # cool grey -- the agent's side
 ERRBG = "#3a1f1f"
 
 
-def run_claude(text, session, first):
+def run_claude(text, session, first, tools=False):
     """One turn against the rewrite session. Returns (ok, output).
 
     `first` opens the session at the chosen id; afterwards we resume it, so
-    the agent still has the prompt it wrote and every answer given since."""
-    cmd = [CLAUDE, "-p", text, "--disallowedTools", *NO_TOOLS]
+    the agent still has the prompt it wrote and every answer given since.
+    `tools` swaps the deny-list for the advise allow-list."""
+    if tools:
+        cmd = [CLAUDE, "-p", text, "--allowedTools", *ADVISE_TOOLS]
+    else:
+        cmd = [CLAUDE, "-p", text, "--disallowedTools", *NO_TOOLS]
     cmd += ["--session-id", session] if first else ["--resume", session]
     try:
         p = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True,
@@ -205,6 +224,63 @@ def run_claude(text, session, first):
         return False, f"claude CLI not found at {CLAUDE}"
     except subprocess.TimeoutExpired:
         return False, f"timed out after {TIMEOUT}s"
+    if p.returncode != 0:
+        return False, (p.stderr or p.stdout or "claude exited non-zero").strip()
+    return True, p.stdout.strip()
+
+def live_sessions():
+    """Other Claude Code sessions on this machine, newest-looking first.
+
+    Claude Code keeps a registry at ~/.claude/sessions/<pid>.json while a
+    session is running. A stale file outlives a crashed session, so a name only
+    counts as reachable if its pid is still alive AND it left a message socket.
+    Our own headless turns are excluded -- answering yourself is never useful.
+    """
+    out = []
+    d = os.path.expanduser("~/.claude/sessions")
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return out
+    for fn in names:
+        if not fn.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(d, fn)) as f:
+                j = json.load(f)
+        except (OSError, ValueError):
+            continue
+        pid, name = j.get("pid"), j.get("name")
+        if not pid or not name or not j.get("messagingSocketPath"):
+            continue
+        if not os.path.isdir("/proc/%s" % pid):
+            continue
+        out.append({"name": name, "pid": pid,
+                    "status": j.get("status") or "?",
+                    "cwd": j.get("cwd") or ""})
+    out.sort(key=lambda s: s["name"])
+    return out
+
+
+def send_to_session(name, message):
+    """Hand `message` to another session, as a message -- not as keystrokes.
+
+    Claude Code delivers it into that session's queue; it appears there the way
+    a message from a person does, and its agent decides what to do with it. We
+    never type into someone else's input box, so nothing can be executed behind
+    your back.
+    """
+    q = ("Use SendMessage to send exactly this message to the session named "
+         "%s, then reply with one line saying whether it was delivered:\n\n%s"
+         % (name, message))
+    cmd = [CLAUDE, "-p", q, "--allowedTools", "ListAgents", "SendMessage"]
+    try:
+        p = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True,
+                           text=True, timeout=TIMEOUT)
+    except FileNotFoundError:
+        return False, "claude CLI not found at %s" % CLAUDE
+    except subprocess.TimeoutExpired:
+        return False, "timed out after %ss" % TIMEOUT
     if p.returncode != 0:
         return False, (p.stderr or p.stdout or "claude exited non-zero").strip()
     return True, p.stdout.strip()
@@ -299,7 +375,6 @@ def save_state(session, started, result, msgs):
     Claude Code keeps the real conversation under the session id; this only
     records which id to resume plus what to redraw on screen."""
     try:
-        import json
         tmp = STATE + ".tmp"
         with open(tmp, "w") as f:
             json.dump({"session": session, "started": started,
@@ -311,7 +386,6 @@ def save_state(session, started, result, msgs):
 
 def load_state():
     try:
-        import json
         with open(STATE) as f:
             d = json.load(f)
         if not isinstance(d, dict):
@@ -467,6 +541,12 @@ class App:
                                    FIELD, FG, hover="#3a3a3c")
         self.copybtn.config(state="disabled")
         self.copybtn.pack(side="right")
+        # Explain drafts the reply to the terminal's question; this delivers it
+        # there instead of making you paste it back by hand. Same text as Copy.
+        self.sendtobtn = RoundButton(row, "Send to", self.send_to, self.ui,
+                                     FIELD, FG, hover="#3a3a3c")
+        self.sendtobtn.config(state="disabled")
+        self.sendtobtn.pack(side="right", padx=(0, 6))
 
         # The WM border handles resizing, so the pad draws no grip of its own.
 
@@ -667,6 +747,7 @@ class App:
             self.out.delete("1.0", "end")
             self.out.insert("1.0", result)
             self.copybtn.config(state="normal")
+            self.sendtobtn.config(state="normal")
         for m in msgs:
             try:
                 who, text, err = m
@@ -688,6 +769,7 @@ class App:
         self.chat.delete("all")
         self.out.delete("1.0", "end")
         self.copybtn.config(state="disabled")
+        self.sendtobtn.config(state="disabled")
         self.mode = "rewrite"
         self.prompt_pane(True)
         self.status.config(text="paste a prompt — enter to send")
@@ -764,49 +846,116 @@ class App:
 
     def _pump_once(self):
         try:
-            ok, payload = self.q.get_nowait()
+            item = self.q.get_nowait()
         except queue.Empty:
-            pass
-        else:
-            self.busy = False
-            self.btn.config(state="normal")
-            self.askbtn.config(state="normal")
-            self.advbtn.config(state="normal")
+            return
+        # A delivery to another terminal is not a turn of the thread: it must
+        # not touch self.result, the prompt pane, or the saved session.
+        if item and item[0] == "sendto":
+            _, name, ok, out = item
+            self.sendtobtn.config(state="normal")
             if ok:
-                self.started = True
-                prompt, aside = split_output(payload)
-                if getattr(self, "mode", "rewrite") == "advise" and not prompt:
-                    # In advise mode the answer IS the deliverable -- there is
-                    # no prompt to copy. It goes to the chat in full, and the
-                    # prompt pane hides so the thread gets the whole window.
-                    # Truncating it into a bubble read as a cut-off answer.
-                    aside = payload.strip()
-                if prompt:
-                    self.result = prompt
-                    self.out.delete("1.0", "end")
-                    self.out.insert("1.0", prompt)
-                    self.copybtn.config(state="normal")
-                if aside:
-                    self.say("agent", aside)
-                elif prompt:
-                    self.say("agent", "(prompt updated)")
-                save_state(self.session, self.started, self.result, self.msgs)
-                if getattr(self, "mode", "rewrite") == "advise":
-                    self.status.config(text="advice above — reply to dig in")
-                elif not prompt:
-                    # A question answered in the chat: the prompt on the left
-                    # is untouched and still the thing worth copying.
-                    self.status.config(
-                        text="answered in the chat — prompt on the left is "
-                             "unchanged")
-                else:
-                    # The prompt is always usable -- a question is optional.
-                    self.status.config(
-                        text="ready to copy — reply only if you want to refine")
+                self.say("agent", "Sent to %s.\n\n%s" % (name, out.strip()))
+                self.status.config(text="sent to %s" % name)
             else:
-                self.say("agent", payload, err=True)
-                self.status.config(text="failed")
-            self.entry.focus_set()
+                self.say("agent", "Could not send to %s: %s" % (name, out),
+                         err=True)
+                self.status.config(text="send failed")
+            save_state(self.session, self.started, self.result, self.msgs)
+            return
+        ok, payload = item
+        self.busy = False
+        self.btn.config(state="normal")
+        self.askbtn.config(state="normal")
+        self.advbtn.config(state="normal")
+        if ok:
+            self.started = True
+            prompt, aside = split_output(payload)
+            if getattr(self, "mode", "rewrite") == "advise" and not prompt:
+                # In advise mode the answer IS the deliverable -- there is
+                # no prompt to copy. It goes to the chat in full, and the
+                # prompt pane hides so the thread gets the whole window.
+                # Truncating it into a bubble read as a cut-off answer.
+                aside = payload.strip()
+            if prompt:
+                self.result = prompt
+                self.out.delete("1.0", "end")
+                self.out.insert("1.0", prompt)
+                self.copybtn.config(state="normal")
+                self.sendtobtn.config(state="normal")
+            if aside:
+                self.say("agent", aside)
+            elif prompt:
+                self.say("agent", "(prompt updated)")
+            save_state(self.session, self.started, self.result, self.msgs)
+            if getattr(self, "mode", "rewrite") == "advise":
+                self.status.config(text="advice above — reply to dig in")
+            elif not prompt:
+                # A question answered in the chat: the prompt on the left
+                # is untouched and still the thing worth copying.
+                self.status.config(
+                    text="answered in the chat — prompt on the left is "
+                         "unchanged")
+            else:
+                # The prompt is always usable -- a question is optional.
+                self.status.config(
+                    text="ready to copy — reply only if you want to refine")
+        else:
+            self.say("agent", payload, err=True)
+            self.status.config(text="failed")
+        self.entry.focus_set()
+
+    def send_to(self):
+        """Deliver the drafted reply to whichever terminal asked the question.
+
+        You pick the session by name; nothing is sent until you click one. The
+        text delivered is exactly what Copy would put on the clipboard, so what
+        you see on the left is what the other session gets."""
+        if not self.result:
+            return
+        peers = live_sessions()
+        me = os.getpid()
+        peers = [x for x in peers if x["pid"] != me]
+        if not peers:
+            self.status.config(text="no other Claude sessions running")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Send to")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        tk.Label(win, text="Send this reply to which terminal?", bg=BG, fg=FG,
+                 font=self.ui).pack(padx=14, pady=(12, 8), anchor="w")
+        for peer in peers:
+            label = "%s  ·  %s  ·  pid %s" % (peer["name"], peer["status"],
+                                              peer["pid"])
+            b = RoundButton(win, label,
+                            lambda p=peer: self._deliver(p, win),
+                            self.ui, FIELD, FG, hover="#3a3a3c")
+            b.pack(anchor="w", padx=14, pady=3)
+        cancel = tk.Label(win, text="cancel", bg=BG, fg=MUTED, font=self.ui,
+                          cursor="hand2")
+        cancel.pack(pady=(8, 12))
+        cancel.bind("<Button-1>", lambda e: win.destroy())
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + 40
+        y = self.root.winfo_rooty() + 60
+        win.geometry("+%d+%d" % (x, y))
+
+    def _deliver(self, peer, win):
+        """Hand the reply to the chosen session, off the UI thread."""
+        win.destroy()
+        text = self.result
+        name = peer["name"]
+        self.sendtobtn.config(state="disabled")
+        self.status.config(text="sending to %s…" % name)
+        self.say("you", "Send to %s:\n\n%s" % (name, text))
+
+        def work():
+            ok, out = send_to_session(name, text)
+            self.q.put(("sendto", name, ok, out))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def copy(self):
         if not self.result:

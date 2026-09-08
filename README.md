@@ -12,7 +12,9 @@ Three buttons, one text box:
 | **Explain** | Paste a question *an agent asked you*. Get it in plain English, plus a draft reply to paste back. |
 | **Advise** | Ask a straight question. Get an answer with a recommendation, the tradeoff, and the next step — not a menu. |
 
-The **Copy** button always copies whatever is in the left pane.
+The **Copy** button always copies whatever is in the left pane. **Send to**
+delivers that same text to another Claude Code session on your machine — see
+[Talking to your other terminals](#talking-to-your-other-terminals).
 
 ## Requirements
 
@@ -67,10 +69,32 @@ reopening it picks the thread back up.
 | --- | --- |
 | `PROMPT_AGENT_CLAUDE` | Full path to the `claude` binary, if it isn't on your `PATH`. |
 
+## Talking to your other terminals
+
+If a Claude Code session in another terminal asks you something you don't
+follow, paste its question into the pad and press **Explain**. You get the
+question in plain words plus a drafted reply.
+
+**Send to** then hands that reply straight to the session that asked, so you
+don't have to switch windows and retype it. It lists the Claude Code sessions
+currently running on your machine by name and status; you pick one, and nothing
+is sent until you do.
+
+The reply arrives there as a *message* — the same way a message from a person
+does. It is not typed into that session's input box and it does not press enter
+for you; the agent on the other end reads it and decides what to do.
+
 ## Safety
 
-The rewriter runs with `Write`, `Edit`, `Bash`, `Agent` and `Task` disabled. It
-can only hand you text — it will never execute the task it is describing.
+**Send** and **Explain** run with `Write`, `Edit`, `Bash`, `Agent` and `Task`
+disabled. They can only hand you text — they will never execute the task they
+are describing.
+
+**Advise** is different, because there you are asking the agent to actually
+look at something. It can read and write files, run commands, list your other
+Claude Code sessions and send them messages. It is told not to change anything
+unless you asked in that message, and never to message another session unless
+you asked — and to tell you what it sent and to whom when you do.
 
 ## Troubleshooting
 
