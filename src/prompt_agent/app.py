@@ -1099,7 +1099,7 @@ class App:
         self.undo_label()
         self.status.config(text="your text is back")
 
-    def pick_session(self, title, on_pick):
+    def pick_session(self, title, on_pick, preview=""):
         """A small list of the live sessions. Nothing happens until a click."""
         peers = [x for x in live_sessions() if x["pid"] != os.getpid()]
         if not peers:
@@ -1111,6 +1111,17 @@ class App:
         win.transient(self.root)
         tk.Label(win, text=title, bg=BG, fg=FG,
                  font=self.ui).pack(padx=14, pady=(12, 8), anchor="w")
+        if preview:
+            box = tk.Text(win, height=6, width=54, bg=FIELD, fg=FG,
+                          font=self.mono, relief="flat", wrap="word",
+                          padx=8, pady=6, highlightthickness=0, bd=0)
+            box.insert("1.0", preview)
+            box.config(state="disabled")
+            box.pack(padx=14, pady=(0, 10), fill="x")
+            tk.Label(win, text="this exact text is what gets sent",
+                     bg=BG, fg=MUTED, font=self.ui).pack(padx=14,
+                                                         pady=(0, 8),
+                                                         anchor="w")
         for peer in peers:
             label = "%s  ·  %s  ·  pid %s" % (peer["name"], peer["status"],
                                               peer["pid"])
@@ -1147,11 +1158,13 @@ class App:
         you see on the left is what the other session gets."""
         if not self.outgoing():
             return
-        title = "Send this reply to which terminal?"
+        title = "Send this to which terminal?"
         was = getattr(self, "grabbed_from", "")
         if was:
-            title = "Send this reply back to %s?" % was
-        self.pick_session(title, self._deliver)
+            title = "Send this back to %s?" % was
+        # Showing the actual text removes the guesswork about whether the
+        # agent's last message was advice for you or a reply for the terminal.
+        self.pick_session(title, self._deliver, preview=self.outgoing())
 
     def _deliver(self, peer):
         """Hand the reply to the chosen session, off the UI thread."""
